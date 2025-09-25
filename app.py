@@ -57,7 +57,7 @@ with st.sidebar:
 
     st.subheader("Settings")
     model_name = st.text_input("Ollama model", value="llama3.2")
-    top_k = st.slider("Retriever k", min_value=1, max_value=10, value=5)
+    # top_k = st.slider("Retriever k", min_value=1, max_value=10, value=5)
     st.markdown(
         "Make sure you’ve pulled the models locally:\n\n"
         "`ollama pull llama3.2`\n\n`ollama pull mxbai-embed-large`"
@@ -66,7 +66,7 @@ with st.sidebar:
     
 
 # Allow changing k at runtime
-retriever.search_kwargs["k"] = top_k
+# retriever.search_kwargs["k"] = top_k
 
 # Chat state
 if "messages" not in st.session_state:
