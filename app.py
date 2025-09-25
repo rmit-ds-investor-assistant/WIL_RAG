@@ -51,8 +51,12 @@ def format_docs(docs):
 # Sidebar controls
 with st.sidebar:
 
-    # if st.button("Company Info"):
-    #     st.switch_page("pages/company_info.py")
+    st.subheader("Navigation")
+    if st.button("Chat"):
+        st.switch_page("app.py")
+
+    if st.button("Company Info"):
+        st.switch_page("pages/company_info.py")
 
 
     st.subheader("Settings")
