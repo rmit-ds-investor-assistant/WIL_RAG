@@ -4,8 +4,17 @@ import pandas as pd
 
 st.set_page_config(page_title="Company Info")
 
-st.title("🏢 Company Info")
+st.title("Company Info")
 st.caption("Quick reference of companies in the dataset")
+
+with st.sidebar:
+
+    st.subheader("Navigation")
+    if st.button("Chat"):
+        st.switch_page("app.py")
+
+    if st.button("Company Info"):
+        st.switch_page("pages/company_info.py")
 
 # Optional: override/shorten descriptions here
 COMPANY_DESCRIPTIONS = {
