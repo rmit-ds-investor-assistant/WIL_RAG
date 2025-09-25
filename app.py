@@ -7,7 +7,19 @@ from vector import retriever  # builds/loads Chroma on import
 st.set_page_config(page_title="Financial RAG Chatbot")
 
 st.title("Financial RAG Chatbot (Ollama + Chroma)")
-st.caption("Ask about company financials")
+st.caption("""
+Get to know the company before investing.
+
+ABC is a smart, user-friendly chat that helps investors to explore and understand 
+           companies before investing. Make informed decisions by reviewing the data. 
+
+Ask your question on company here. 
+
+Disclaimer: ABC provides company data and insights for informational purposes only. 
+           We do not offer financial, investment, or legal advice. 
+           Users should conduct their own research and seek professional guidance before making investment decisions. 
+           ABC is not responsible for any financial losses or actions taken based on the information provided.
+""")
 
 # Model + prompt (cache the chain so it’s created once)
 @st.cache_resource
@@ -38,6 +50,11 @@ def format_docs(docs):
 
 # Sidebar controls
 with st.sidebar:
+
+    # if st.button("Company Info"):
+    #     st.switch_page("pages/company_info.py")
+
+
     st.subheader("Settings")
     model_name = st.text_input("Ollama model", value="llama3.2")
     top_k = st.slider("Retriever k", min_value=1, max_value=10, value=5)
@@ -45,6 +62,8 @@ with st.sidebar:
         "Make sure you’ve pulled the models locally:\n\n"
         "`ollama pull llama3.2`\n\n`ollama pull mxbai-embed-large`"
     )
+
+    
 
 # Allow changing k at runtime
 retriever.search_kwargs["k"] = top_k
