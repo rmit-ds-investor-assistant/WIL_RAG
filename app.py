@@ -2,23 +2,24 @@
 import streamlit as st
 from langchain_ollama.llms import OllamaLLM
 from langchain_core.prompts import ChatPromptTemplate
-from vector import retriever  # builds/loads Chroma on import
+from vector import retriever, df  # builds/loads Chroma on import
+import matplotlib.pyplot as plt
 
-st.set_page_config(page_title="Financial RAG Chatbot")
+st.set_page_config(page_title="Financial Chatbot")
 
-st.title("Financial RAG Chatbot (Ollama + Chroma)")
+st.title("FinGenie")
 st.caption("""
 Get to know the company before investing.
 
-ABC is a smart, user-friendly chat that helps investors to explore and understand 
+FinGenie is a smart, user-friendly chat that helps investors to explore and understand 
            companies before investing. Make informed decisions by reviewing the data. 
 
 Ask your question on company here. 
 
-Disclaimer: ABC provides company data and insights for informational purposes only. 
+Disclaimer: FinGenie provides company data and insights for informational purposes only. 
            We do not offer financial, investment, or legal advice. 
            Users should conduct their own research and seek professional guidance before making investment decisions. 
-           ABC is not responsible for any financial losses or actions taken based on the information provided.
+           FinGenie is not responsible for any financial losses or actions taken based on the information provided.
 """)
 
 # Model + prompt (cache the chain so it’s created once)
@@ -47,6 +48,52 @@ def format_docs(docs):
         header = f"[Doc {i}] Company Code: {meta.get('company_code','?')} | Industry: {meta.get('industry','?')}"
         parts.append(header + "\n" + d.page_content)
     return "\n\n---\n\n".join(parts)
+
+
+# ---------------- Chart Function ----------------
+def plot_revenue(df, question: str, company: str = None):
+    if company:
+        data = df[df["Company name"].str.contains(company, case=False)]
+        if data.empty:
+            st.warning(f"No data found for {company}")
+            return None
+    else:
+        data = df
+
+    show_2024 = "2024" in question
+    show_2025 = "2025" in question
+    if not show_2024 and not show_2025:
+        show_2024, show_2025 = True, True
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    x = range(len(data))
+    width = 0.35
+
+    if show_2024:
+        ax.bar(
+            [i - width/2 if show_2025 else i for i in x],
+            data["Half year ending June 2024 Revenue"],
+            width if show_2025 else 0.6,
+            label="Revenue H1 2024"
+        )
+
+    if show_2025:
+        ax.bar(
+            [i + width/2 if show_2024 else i for i in x],
+            data["Half year ending June 2025 Revenue"],
+            width if show_2024 else 0.6,
+            label="Revenue H1 2025"
+        )
+
+    ax.set_xticks(list(x))
+    ax.set_xticklabels(data["Company name"], rotation=45, ha="right")
+    ax.set_ylabel("Revenue (mn AUD)")
+    ax.set_title("Half-Year Revenue")
+    ax.legend()
+    plt.tight_layout()
+    return fig
+
+
 
 # Sidebar controls
 with st.sidebar:
@@ -79,40 +126,61 @@ if "messages" not in st.session_state:
 for m in st.session_state.messages:
     with st.chat_message(m["role"]):
         st.markdown(m["content"])
+        if "chart" in m:  # show stored chart
+            st.pyplot(m["chart"])
 
+# ---------------- Handle New User Input ----------------
 question = st.chat_input("Ask about a company’s performance, revenue, profit, etc.")
 if question:
+    # Save user message
     st.session_state.messages.append({"role": "user", "content": question})
     with st.chat_message("user"):
         st.markdown(question)
 
-    with st.chat_message("assistant"):
-        with st.spinner("Thinking..."):
-            docs = retriever.invoke(question)
-            reviews = format_docs(docs)
-            chain = get_chain(model_name)
-            answer = chain.invoke({"reviews": reviews, "question": question})
+    # Assistant response
+    if any(k in question.lower() for k in ["chart", "plot", "graph", "visualize"]):
+        company = None
+        for name in df["Company name"].unique():
+            if name.lower() in question.lower():
+                company = name
+                break
+        fig = plot_revenue(df, question, company)
+        if fig:
+            msg = {"role": "assistant", "content": "Here is the bar chart you requested 📊", "chart": fig}
+            st.session_state.messages.append(msg)
+            with st.chat_message("assistant"):
+                st.markdown(msg["content"])
+                st.pyplot(fig)
+        else:
+            msg = {"role": "assistant", "content": "Sorry, I couldn’t generate a chart for that query."}
+            st.session_state.messages.append(msg)
+            with st.chat_message("assistant"):
+                st.markdown(msg["content"])
+    else:
+        with st.chat_message("assistant"):
+            with st.spinner("Thinking..."):
+                docs = retriever.invoke(question)
+                reviews = format_docs(docs)
+                chain = get_chain("llama3.2")
+                answer = chain.invoke({"reviews": reviews, "question": question})
 
-            st.markdown(answer)
+                st.markdown(answer)
 
-            with st.expander("Show retrieved records"):
-                for i, d in enumerate(docs, 1):
-                    meta = d.metadata or {}
-                    st.markdown(
-                        f"**Doc {i}** — "
-                        f"Company: {meta.get('company_name','?')} "
-                        f"(Code: {meta.get('company_code','?')}) • "
-                        f"Industry: {meta.get('industry','?')}"
-                    )
-                    st.text(d.page_content[:1500])  # preview
+                # 🆕 Show retrieved records only for normal questions
+                with st.expander("📂 Show retrieved records"):
+                    for i, d in enumerate(docs, 1):
+                        meta = d.metadata or {}
+                        st.markdown(
+                            f"**Doc {i}** — "
+                            f"Company Code: {meta.get('company_code','?')} | "
+                            f"Industry: {meta.get('industry','?')}"
+                        )
+                        st.text(d.page_content[:1200])  # preview (cut off long text)
 
-    st.session_state.messages.append({"role": "assistant", "content": answer})
+                st.session_state.messages.append({"role": "assistant", "content": answer})
+   
 
-# Utility buttons
-col1, col2 = st.columns(2)
-with col1:
-    if st.button("🔄 Reset chat"):
-        st.session_state.messages = []
-        st.rerun()
-with col2:
-    st.write("")  # spacer
+# ---------------- Reset Chat ----------------
+if st.button("🔄 Reset chat"):
+    st.session_state.messages = []
+    st.rerun()
