@@ -13,8 +13,6 @@ Here are some relevant company records:{reviews}
 
 Here is the question to answer: {question}
 
-If calculations are needed, explain step by step before giving the final answer.
-
 If the questions is not relevant to financial reports, please reply accordingly.
 """
 

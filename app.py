@@ -27,16 +27,16 @@ Disclaimer: FinGenie provides company data and insights for informational purpos
 def get_chain(model_name: str = "llama3.2"):
     model = OllamaLLM(model=model_name)
     template = """
-You are an expert financial analyst.
-Answer the question based on the company financial records below.
+You are an expert financial analyst. 
+Answer the question based on the company financial reports below.
 
-Relevant records:
-{reviews}
+Here are some relevant company records:{reviews}
 
-Question: {question}
+Here is the question to answer: {question}
 
-If calculations are needed, explain step by step before giving the final answer.
+If the questions is not relevant to financial reports, please reply accordingly.
 """
+
     prompt = ChatPromptTemplate.from_template(template)
     return prompt | model
 
@@ -140,7 +140,7 @@ if question:
     # Assistant response
     if any(k in question.lower() for k in ["chart", "plot", "graph", "visualize"]):
         company = None
-        for name in df["Company name"].unique():
+        for name in df["Company name"].dropna().astype(str).unique():
             if name.lower() in question.lower():
                 company = name
                 break
