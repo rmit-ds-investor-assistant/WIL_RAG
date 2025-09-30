@@ -13,8 +13,6 @@ Get to know the company before investing.
 ABC is a smart, user-friendly chat that helps investors to explore and understand 
            companies before investing. Make informed decisions by reviewing the data. 
 
-Ask your question on company here. 
-
 Disclaimer: ABC provides company data and insights for informational purposes only. 
            We do not offer financial, investment, or legal advice. 
            Users should conduct their own research and seek professional guidance before making investment decisions. 
