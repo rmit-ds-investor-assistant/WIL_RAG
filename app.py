@@ -97,6 +97,7 @@ def plot_revenue(df, question: str, company: str = None):
 
 # Sidebar controls
 with st.sidebar:
+    st.image("fingenie_logo.png", width='stretch')
 
     st.subheader("Navigation")
     if st.button("Chat"):
@@ -109,10 +110,10 @@ with st.sidebar:
     st.subheader("Settings")
     model_name = st.text_input("Ollama model", value="llama3.2")
     # top_k = st.slider("Retriever k", min_value=1, max_value=10, value=5)
-    st.markdown(
-        "Make sure you’ve pulled the models locally:\n\n"
-        "`ollama pull llama3.2`\n\n`ollama pull mxbai-embed-large`"
-    )
+    # st.markdown(
+    #     "Make sure you’ve pulled the models locally:\n\n"
+    #     "`ollama pull llama3.2`\n\n`ollama pull mxbai-embed-large`"
+    # )
 
     
 
@@ -181,6 +182,6 @@ if question:
    
 
 # ---------------- Reset Chat ----------------
-if st.button("🔄 Reset chat"):
-    st.session_state.messages = []
-    st.rerun()
+# if st.button("🔄 Reset chat"):
+#     st.session_state.messages = []
+#     st.rerun()
