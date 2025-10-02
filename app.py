@@ -65,6 +65,17 @@ def plot_revenue(df, question: str, company: str = None):
     if not show_2024 and not show_2025:
         show_2024, show_2025 = True, True
 
+    if show_2025 and not show_2024:
+        data = data.nlargest(5, "Revenue for full year ending Jun 25 in mn in AUD")
+    elif show_2024 and not show_2025:
+        data = data.nlargest(5, "Revenue for full year ending Jun 24 in mn in AUD")
+    else:
+        data["max_revenue"] = data[[
+            "Revenue for full year ending Jun 24 in mn in AUD",
+            "Revenue for full year ending Jun 25 in mn in AUD"
+        ]].max(axis=1)
+        data = data.nlargest(5, "max_revenue")
+
     fig, ax = plt.subplots(figsize=(8, 5))
     x = range(len(data))
     width = 0.35
@@ -72,23 +83,23 @@ def plot_revenue(df, question: str, company: str = None):
     if show_2024:
         ax.bar(
             [i - width/2 if show_2025 else i for i in x],
-            data["Half year ending June 2024 Revenue"],
+            data["Revenue for full year ending Jun 24 in mn in AUD"],
             width if show_2025 else 0.6,
-            label="Revenue H1 2024"
+            label="Revenue in 2024"
         )
 
     if show_2025:
         ax.bar(
             [i + width/2 if show_2024 else i for i in x],
-            data["Half year ending June 2025 Revenue"],
+            data["Revenue for full year ending Jun 25 in mn in AUD"],
             width if show_2024 else 0.6,
-            label="Revenue H1 2025"
+            label="Revenue in 2025"
         )
 
     ax.set_xticks(list(x))
     ax.set_xticklabels(data["Company name"], rotation=45, ha="right")
     ax.set_ylabel("Revenue (mn AUD)")
-    ax.set_title("Half-Year Revenue")
+    ax.set_title("Full-Year Revenue")
     ax.legend()
     plt.tight_layout()
     return fig
