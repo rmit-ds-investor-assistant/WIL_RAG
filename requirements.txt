@@ -1,5 +1,8 @@
-#These are the packages
 langchain
 langchain-ollama
 langchain-chroma
 pandas
+streamlit
+openpyxl
+pandas 
+rouge-score
