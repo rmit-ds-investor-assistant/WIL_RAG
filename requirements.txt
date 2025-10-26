@@ -4,3 +4,4 @@ langchain-chroma
 pandas
 streamlit
 openpyxl
+matplotlib
