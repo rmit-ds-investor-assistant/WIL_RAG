@@ -1,78 +1,95 @@
-import re, json, math, string
-from collections import Counter
-from statistics import mean
+import os
+import re
+from typing import Dict, Optional
 
-# Unanswered detection
-UNK_TOKENS = {
-    "", "n/a", "na", "none", "no answer", "null", "unknown",
-    "i don't know", "idk", "not sure", "cannot answer", "can't answer",
-    "insufficient information", "not enough information"
-}
-MIN_CHAR = 3
-UNK_REGEXES = [
-    r"\b(i|we)\s+(don'?t|do not)\s+know\b",
-    r"\b(cannot|can't)\s+answer\b",
-    r"\binsufficient\s+information\b",
-    r"\bnot\s+enough\s+information\b"
+import numpy as np
+import matplotlib.pyplot as plt
+from rouge_score import rouge_scorer
+from sentence_transformers import SentenceTransformer, util
+
+def ensure_dirs(*paths: str) -> None:
+    for p in paths:
+        os.makedirs(p, exist_ok=True)
+
+_ABSTAIN_PATTERNS = [
+    r"\b(i (do not|don't) know)\b",
+    r"\b(not (in|within) (the )?(kb|knowledge base|documents|docs))\b",
+    r"\b(cannot|can't) (find|locate)\b",
+    r"\b(no (information|data) (available|found))\b",
+    r"\b(insufficient (context|information))\b",
+    r"\bout[- ]of[- ]kb\b",
+    r"\b(i cannot (answer|provide))\b",
+    r"\b(no (knowledge|record) of this)\b",
 ]
 
-# Text helpers
-def normalize_text(s):
-    s = "" if s is None else str(s)
-    s = s.lower().translate(str.maketrans("", "", string.punctuation))
-    return re.sub(r"\s+", " ", s).strip()
+def clean(s: str) -> str:
+    if not isinstance(s, str):
+        return ""
+    return re.sub(r"\s+", " ", s.strip())
 
-def tokens(s):
-    t = normalize_text(s).split(" ")
-    return [x for x in t if x]
+def looks_like_refusal(s: str) -> bool:
+    s_low = clean(s).lower()
+    return any(re.search(p, s_low) for p in _ABSTAIN_PATTERNS)
 
-def rouge1(ref, pred):
-    ref_t, pred_t = tokens(ref), tokens(pred)
-    if not ref_t and not pred_t:
-        return {"precision": 0.0, "recall": 0.0, "f1": 0.0}
-    rc, pc = Counter(ref_t), Counter(pred_t)
-    overlap = sum(min(rc[w], pc[w]) for w in set(rc) | set(pc))
-    p = overlap / max(len(pred_t), 1)
-    r = overlap / max(len(ref_t), 1)
-    f1 = 0.0 if (p + r) == 0 else 2 * p * r / (p + r)
-    return {"precision": p, "recall": r, "f1": f1}
+_rouge = rouge_scorer.RougeScorer(["rougeLsum"], use_stemmer=True)
+_sbert: Optional[SentenceTransformer] = None
 
-def is_unanswered(pred):
-    s = "" if pred is None else str(pred).strip().lower()
-    if len(s) < MIN_CHAR or s in UNK_TOKENS:
-        return True
-    return any(re.search(rx, s) for rx in UNK_REGEXES)
+def _lazy_sbert():
+    global _sbert
+    if _sbert is None:
+        _sbert = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+    return _sbert
 
-# NDCG
-def _dcg(rels):
-    return sum(((2**rel - 1) / math.log2(i + 2)) for i, rel in enumerate(rels))
+def rougeL_f1(pred: str, ref: str) -> float:
+    pred, ref = clean(pred), clean(ref)
+    if not pred or not ref:
+        return 0.0
+    return _rouge.score(ref, pred)["rougeLsum"].fmeasure
 
-def ndcg_at_k(rels):
-    if not rels: return None
-    ideal = sorted(rels, reverse=True)
-    den = _dcg(ideal)
-    return 0.0 if den == 0 else _dcg(rels) / den
+def sbert_cosine(pred: str, ref: str) -> float:
+    pred, ref = clean(pred), clean(ref)
+    if not pred or not ref:
+        return 0.0
+    model = _lazy_sbert()
+    emb = model.encode([pred, ref], convert_to_tensor=True, normalize_embeddings=True)
+    return float(util.cos_sim(emb[0], emb[1]).item())
 
-def parse_relevances(row):
-    # JSON list in 'retrieved_relevance'
-    if "retrieved_relevance" in row and row["retrieved_relevance"]:
-        try:
-            vals = row["retrieved_relevance"]
-            if isinstance(vals, str): vals = json.loads(vals)
-            return [int(v) for v in vals if str(v).strip().lstrip("-").isdigit()]
-        except Exception:
-            pass
-    # rel_1..rel_n columns
-    cols = [c for c in row.index if str(c).lower().startswith("rel_")]
-    rels = []
-    for c in cols:
-        v = row.get(c, "")
-        try:
-            rels.append(int(v))
-        except Exception:
-            pass
-    return rels if rels else None
+def score_known_infer(gold: str, pred: str) -> Dict[str, float]:
+    return {
+        "rougeL": rougeL_f1(pred, gold),
+        "semantic_cosine": sbert_cosine(pred, gold),
+        "good_refusal": np.nan,
+        "hallucination_rate": np.nan,
+    }
 
-def safe_mean(xs):
-    xs = [x for x in xs if x is not None]
-    return 0.0 if not xs else float(mean(xs))
+def score_outkb(pred: str) -> Dict[str, float]:
+    refusal = looks_like_refusal(pred)
+    answered_nonempty = bool(clean(pred))
+    hallucination = int(answered_nonempty and not refusal)
+    return {
+        "rougeL": np.nan,
+        "semantic_cosine": np.nan,
+        "good_refusal": int(refusal),
+        "hallucination_rate": hallucination,
+    }
+
+def set_watercolor_theme():
+    plt.style.use("default")
+    plt.rcParams.update({
+        "figure.facecolor": "#F7FAFC",
+        "axes.facecolor":   "#F7FAFC",
+        "savefig.facecolor":"#F7FAFC",
+        "axes.edgecolor":   "#9FB3C8",
+        "axes.labelcolor":  "#213547",
+        "text.color":       "#213547",
+        "xtick.color":      "#213547",
+        "ytick.color":      "#213547",
+        "grid.color":       "#D7E3EE",
+        "grid.linestyle":   "-",
+        "grid.linewidth":   0.8,
+        "axes.grid":        True,
+        "font.size":        12,
+        "axes.titleweight": "semibold",
+        "font.family":      "sans-serif",
+        "font.sans-serif":  ["Lato", "DejaVu Sans", "Helvetica", "Arial"],
+    })

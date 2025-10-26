@@ -1,211 +1,145 @@
 import argparse
-import re
-from pathlib import Path
+import os
+import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import numpy as np
 
-# Watercolor theme
-def set_watercolor_theme():
-    plt.style.use("default")
-    plt.rcParams.update({
-        "figure.facecolor": "#F7FAFC",
-        "axes.facecolor":   "#F7FAFC",
-        "savefig.facecolor":"#F7FAFC",
-        "axes.edgecolor":   "#9FB3C8",
-        "axes.labelcolor":  "#213547",
-        "text.color":       "#213547",
-        "xtick.color":      "#213547",
-        "ytick.color":      "#213547",
-        "grid.color":       "#D7E3EE",
-        "grid.linestyle":   "-",
-        "grid.linewidth":   0.8,
-        "axes.grid":        True,
-        "font.size":        12,
-        "axes.titleweight": "semibold",
-    })
+from utils import ensure_dirs, set_watercolor_theme
 
-COHORT_COLORS = {"Known": "#6BAED6", "Inferred": "#74C0B3", "Out of KB": "#B6D7A8"}
-BAR_COLOR = "#6BAED6"
+PRETTY = {
+    "rougeL": "ROUGE-L",
+    "semantic_cosine": "Semantic similarity (SBERT cosine)",
+}
 
-# helpers
-def prettify_variant(v: str) -> str:
-    m = re.search(r"k\s*=\s*(\d+)", str(v), flags=re.I)
-    if m:
-        return f"k = {int(m.group(1))}"
-    s = re.sub(r"^\s*generated\s*answer\s*", "", str(v), flags=re.I).strip()
-    return s if s else str(v)
+QUALITY = ["rougeL", "semantic_cosine"]  # Known + Inferred only
 
-def variant_order_key(v: str):
-    m = re.search(r"k\s*=\s*(\d+)", str(v), flags=re.I)
-    return (0, int(m.group(1))) if m else (1, str(v).lower())
+# --------------------------
+# Helpers
+# --------------------------
+def ci95(std: pd.Series, n: pd.Series) -> np.ndarray:
+    return 1.96 * (std / np.sqrt(n).replace(0, np.nan))
 
-def ensure_dir(path: str):
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
+def shared_ylim(per_row: pd.DataFrame, metric: str, pad=0.06):
+    s = per_row[metric].dropna()
+    if s.empty:
+        return None
+    lo, hi = np.nanquantile(s, [0.02, 0.98])
+    rng = hi - lo if hi > lo else 1.0
+    return max(0.0, lo - pad*rng), min(1.0, hi + pad*rng)
 
-def add_value_labels(ax, bars, y01=False):
-    """Place labels smartly to avoid clipping/overlap."""
-    for b in bars:
-        h = b.get_height()
-        if h is None or np.isnan(h):
+def save_png(fig, out_path_png: str, dpi: int = 300):
+    fig.savefig(out_path_png, dpi=dpi)
+    plt.close(fig)
+
+def jitter_points(ax, sub: pd.DataFrame, metric: str, jitter=0.08, s=26, alpha=0.25):
+    for k, grp in sub.groupby("k"):
+        vals = grp[metric].dropna().values
+        if len(vals) == 0:
             continue
-        if y01 and h >= 0.95:
-            ax.text(b.get_x()+b.get_width()/2, h - 0.03, f"{h:.2f}",
-                    ha="center", va="top", fontsize=10, color="#163B65")
-        else:
-            ax.text(b.get_x()+b.get_width()/2, min(h + 0.02, 1.03) if y01 else h + 1,
-                    f"{h:.2f}" if y01 else f"{h:.1f}",
-                    ha="center", va="bottom", fontsize=10, color="#1f2d3d")
+        xs = np.full(len(vals), float(k)) + np.random.uniform(-jitter, jitter, len(vals))
+        ax.scatter(xs, vals, s=s, alpha=alpha, edgecolors="none")
 
-def finalize(ax, title, ylabel, xlabel="", y01=False, subtitle=None, legend_handles=None):
-    ax.set_title(title, pad=8)
-    ax.set_ylabel(ylabel)
-    if xlabel:
-        ax.set_xlabel(xlabel)
-    if y01:
-        ax.set_ylim(0, 1.05)
-        ax.margins(y=0.02)
-    if legend_handles:
-        ax.legend(handles=legend_handles, frameon=False, ncol=len(legend_handles),
-                  loc="upper center", bbox_to_anchor=(0.5, 1.22))
-    if subtitle:
-        ax.text(0, 1.10, subtitle, transform=ax.transAxes, fontsize=10, color="#4B5B6A")
-    plt.tight_layout(rect=(0, 0, 1, 0.88))
-
-# plots
-def plot_simple_bars(df, xcol, ycol, title, ylabel, outfile, y01=False):
-    set_watercolor_theme()
-    df = df.copy()
-    df[xcol] = df[xcol].apply(prettify_variant)
-    df = df.sort_values(xcol, key=lambda s: s.map(variant_order_key))
-
-    fig, ax = plt.subplots(figsize=(9.5, 5))
-    bars = ax.bar(df[xcol], df[ycol], color=BAR_COLOR, width=0.55)
-    add_value_labels(ax, bars, y01=y01)
-    # rotate AFTER setting ticks to avoid warnings
-    ax.set_xticks(range(len(df[xcol])), df[xcol], ha="right")
-    finalize(ax, title, ylabel, xlabel="Retrieval depth", y01=y01)
-    ensure_dir(outfile)
-    plt.savefig(outfile, dpi=200, bbox_inches="tight")
-    plt.close(fig)
-
-def plot_grouped(df, metric_col, title, ylabel, outfile, y01=False, subtitle=None):
+# --------------------------
+# Trends: small multiples (with jitter + CI ribbons + in-panel annotations)
+# --------------------------
+def trend_small_multiples(per_row: pd.DataFrame, metric: str, outdir: str,
+                          panel_w=6.4, panel_h=4.9):
     set_watercolor_theme()
 
-    # Extract and sort variants
-    variants_raw = list(dict.fromkeys(df["variant"]))
-    variants_pretty = [prettify_variant(v) for v in variants_raw]
-    order = sorted(range(len(variants_pretty)), key=lambda i: variant_order_key(variants_pretty[i]))
-    variants_raw = [variants_raw[i] for i in order]
-    variants_pretty = [variants_pretty[i] for i in order]
+    cohorts = sorted(per_row.loc[per_row[metric].notna(), "cohort"].unique().tolist())
+    if not cohorts:
+        return None
 
-    cohorts = ["Known", "Inferred", "Out of KB"]
-    width = 0.22
-    xbase = np.arange(len(variants_raw))
+    # order panels by baseline mean (k=1)
+    ordered = []
+    for c in cohorts:
+        base = per_row[(per_row["cohort"]==c) & (per_row["k"]==1)][metric].mean()
+        ordered.append((c, np.inf if pd.isna(base) else base))
+    cohorts = [c for c,_ in sorted(ordered, key=lambda x: x[1])]
 
-    fig, ax = plt.subplots(figsize=(11.5, 6))
-    all_bars = []
+    cols = min(3, len(cohorts))
+    rows = int(np.ceil(len(cohorts) / cols))
+    fig, axes = plt.subplots(rows, cols,
+                             figsize=(panel_w*cols, panel_h*rows),
+                             dpi=300, squeeze=False)
 
-    for i, c in enumerate(cohorts):
-        vals = []
-        for v_raw in variants_raw:
-            sel = df[(df["variant"] == v_raw) & (df["cohort"] == c)][metric_col]
-            vals.append(float(sel.mean()) if not sel.empty else np.nan)
-        xs = xbase + (i - 1) * (width + 0.01)
-        bars = ax.bar(xs, vals, width=width, label=c, color=COHORT_COLORS[c], edgecolor="white", linewidth=0.8)
-        add_value_labels(ax, bars, y01=y01)
-        all_bars.append((bars, c))  # store bars + label
+    ylim = shared_ylim(per_row[per_row["cohort"].isin(cohorts)], metric, pad=0.08)
+    fig.suptitle(PRETTY.get(metric, metric), y=0.98, fontsize=16)
 
-    # X labels
-    ax.set_xticks(xbase)
-    ax.set_xticklabels(variants_pretty, rotation=15, ha="right")
+    for i, cohort in enumerate(cohorts):
+        ax = axes[i//cols, i%cols]
+        sub = per_row[(per_row["cohort"] == cohort) & (per_row[metric].notna())][["k", metric]]
 
-    # Legend fix: use manual handles and real labels
-    handles = [plt.Rectangle((0, 0), 1, 1, color=COHORT_COLORS[c], label=c) for c in cohorts]
-    ax.legend(handles=handles, frameon=False, ncol=len(cohorts),
-              loc="upper center", bbox_to_anchor=(0.5, 1.20))
+        g = sub.groupby("k")[metric].agg(["mean", "std", "count"]).sort_index()
+        if g.empty or g["count"].sum() == 0:
+            ax.axis("off"); continue
 
-    # Title and axis adjustments
-    ylim = (0, 1.05) if y01 else None
-    finalize(ax, title, ylabel, xlabel="Retrieval depth", y01=y01, subtitle=subtitle)
-    ensure_dir(outfile)
-    plt.savefig(outfile, dpi=200, bbox_inches="tight")
-    plt.close(fig)
+        xs = g.index.values.astype(float)
+        ys = g["mean"].values
+        yerr = ci95(g["std"], g["count"]).values
 
-# CLI
+        # raw points (jittered)
+        jitter_points(ax, sub, metric)
+
+        # mean + 95% CI ribbon
+        ax.fill_between(xs, ys - yerr, ys + yerr, alpha=0.18)
+        ax.plot(xs, ys, marker="o", linewidth=2)
+
+        ax.set_xlabel("k (top-k retrieved)")
+        ax.set_ylabel(PRETTY.get(metric, metric))
+        ax.set_title(cohort, loc="left", fontsize=13)
+        if ylim: ax.set_ylim(*ylim)
+        ax.grid(True, alpha=0.35)
+
+        # Δ(1→5), last value, and n-per-k annotations
+        if 1 in g.index and 5 in g.index and np.isfinite(g.loc[1,"mean"]) and np.isfinite(g.loc[5,"mean"]):
+            delta = g.loc[5, "mean"] - g.loc[1, "mean"]
+            ax.text(0.02, 0.02, f"Δ(1→5) = {delta:.02f}", transform=ax.transAxes, fontsize=10)
+        ax.text(xs[-1] + 0.06, ys[-1], f"{ys[-1]:.2f}", va="center", fontsize=10)
+
+        span = (ylim[1]-ylim[0]) if ylim else 0.2
+        voff = span * 0.04
+        for xv, yv, cnt in zip(xs, ys, g["count"].values):
+            ax.text(xv, yv - voff, f"n={int(cnt)}", ha="center", va="top", fontsize=9, alpha=0.85)
+
+    # turn off unused panels
+    for j in range(i+1, rows*cols):
+        axes[j//cols, j%cols].axis("off")
+
+    fig.tight_layout(rect=[0,0,1,0.96])
+    out_path = os.path.join(outdir, f"trend_small_multiples_{metric}.png")
+    save_png(fig, out_path)
+    return out_path
+
+# --------------------------
+# Main
+# --------------------------
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--input", required=True,
-                    help="Path to output_results/metrics_summary_ranked.csv OR metrics_by_cohort.csv")
-    ap.add_argument("--out", default="output_results/plots.png")
+    ap.add_argument("--perrow", "-r", default="output_results/metrics_per_query.csv")
+    ap.add_argument("--outdir", "-o", default="plots")
+    ap.add_argument("--panelw", type=float, default=6.4)
+    ap.add_argument("--panelh", type=float, default=4.9)
     args = ap.parse_args()
-    out_stub = args.out.replace(".png", "")
 
-    if "metrics_by_cohort" in args.input:
-        c = pd.read_csv(args.input)
+    ensure_dirs(args.outdir)
+    per_row = pd.read_csv(args.perrow)
 
-        if "ROUGE1_F1_mean" in c.columns:
-            plot_grouped(
-                c, "ROUGE1_F1_mean",
-                title="ROUGE-1 (mean) by Cohort",
-                ylabel="ROUGE-1 (mean)",
-                outfile=f"{out_stub}_rouge1_by_cohort.png",
-                y01=True,
-                subtitle="Higher is better"
-            )
+    # Clean cohort labels for display
+    per_row["cohort"] = per_row["cohort"].replace({"Infered": "Inferred"})
 
-        if "NDCG_mean" in c.columns and not pd.Series(c["NDCG_mean"]).isna().all():
-            plot_grouped(
-                c, "NDCG_mean",
-                title="NDCG (mean) for Known and Inferred",
-                ylabel="NDCG (mean)",
-                outfile=f"{out_stub}_ndcg_by_cohort.png",
-                y01=True,
-                subtitle="Higher is better"
-            )
+    made = []
+    for m in QUALITY:
+        if m in per_row.columns and per_row[m].notna().any():
+            made.append(trend_small_multiples(per_row, m, args.outdir,
+                                              panel_w=args.panelw, panel_h=args.panelh))
 
-        if "answered_pct" in c.columns:
-            c_pct = c.copy()
-            c_pct["answered_frac"] = c_pct["answered_pct"] / 100.0
-            plot_grouped(
-                c_pct, "answered_frac",
-                title="Answer Coverage (%) by Cohort",
-                ylabel="% Answered",
-                outfile=f"{out_stub}_answered_pct_by_cohort.png",
-                y01=True,
-                subtitle="Closer to 1 (100%) is better"
-            )
-
+    if made:
+        print("[OK] Plots:")
+        for p in made:
+            print("  -", p)
     else:
-        s = pd.read_csv(args.input).sort_values("ROUGE1_F1_mean", ascending=False)
-
-        plot_simple_bars(
-            s, "variant", "ROUGE1_F1_mean",
-            title="ROUGE-1 F1 by Retrieval Depth",
-            ylabel="ROUGE-1 F1",
-            outfile=f"{out_stub}_rouge1_f1_by_depth.png",
-            y01=True
-        )
-
-        s_frac = s.copy(); s_frac["answered_frac"] = s_frac["answered_%"] / 100.0
-        plot_simple_bars(
-            s_frac, "variant", "answered_frac",
-            title="Answer Coverage (%)",
-            ylabel="% Answered",
-            outfile=f"{out_stub}_answered_pct.png",
-            y01=True
-        )
-
-        if "NDCG_mean" in s.columns and not pd.Series(s["NDCG_mean"]).isna().all():
-            plot_simple_bars(
-                s, "variant", "NDCG_mean",
-                title="NDCG by Retrieval Depth",
-                ylabel="NDCG (mean)",
-                outfile=f"{out_stub}_ndcg_by_depth.png",
-                y01=True
-            )
-
-    print("Saved plots with prefix:", f"{out_stub}_*.png")
+        print("[WARN] No informative plots generated.")
 
 if __name__ == "__main__":
     main()
